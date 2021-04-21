@@ -1,0 +1,21 @@
+0000 = 0
+0001 = 1
+0010 = 2
+0011 = 3
+0100 = 4
+0101 = 5
+0110 = 6
+0111 = 7
+1000 = 8
+1001 = 9
+1010 = A
+1011 = B
+1100 = C
+1101 = D
+1110 = E
+1111 = F
+0xNN
+
+1) PORTX to pre-set desired output values and use no pullups for the "to-be" inputs
+2) DDRX now set direction (outputs reflect desired values) and no pullups active
+3) PORTX to re-state desired outputs but now turn on pullups for desired inputs
