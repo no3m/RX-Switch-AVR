@@ -25,7 +25,7 @@ const uint8_t ssPin      = 10;
 const uint8_t oePin      =  9;
 const uint8_t rs485TxPin =  2;
 
-uint8_t antenna[(radios * 2) + 1];
+int antenna[(radios * 2) + 1];
 uint8_t busData[nBytes];
 
 uint8_t radios5_8 = 0;
@@ -36,7 +36,7 @@ bool    mode2x4   = false;
 Messenger message = Messenger();
 
 void processMessage();
-void processData(uint8_t,uint8_t);
+void processData(int,int);
 void busWrite();
 void dumpConfig();
 
@@ -54,12 +54,12 @@ int main (void)
   DDRD  |=  (1 << PD2); // output
 
   // config pins
-  DDRD  &= ~((1<<PD3)|(1<<PD4)|(1<<PD5)|(1<<PD6)|(1<<PD7));          // inputs
-  PORTD |=   (1<<PD3)|(1<<PD4)|(1<<PD5)|(1<<PD6)|(1<<PD7);           // pullup
-  DDRB  &= ~(1<<PB0);                                                // inputs
-  PORTB |=  (1<<PB0);                                                // pullup
+  DDRB  &=  ~(1<<PB0);                                               // inputs
+  PORTB |=   (1<<PB0);                                               // pullup
   DDRC  &= ~((1<<PC0)|(1<<PC1)|(1<<PC2)|(1<<PC3)|(1<<PC4)|(1<<PC5)); // inputs
   PORTC |=   (1<<PC0)|(1<<PC1)|(1<<PC2)|(1<<PC3)|(1<<PC4)|(1<<PC5);  // pullup
+  DDRD  &= ~((1<<PD3)|(1<<PD4)|(1<<PD5)|(1<<PD6)|(1<<PD7));          // inputs
+  PORTD |=   (1<<PD3)|(1<<PD4)|(1<<PD5)|(1<<PD6)|(1<<PD7);           // pullup
 
   // SPI setup
   PORTB |= (1<<PB2);                   // SS/RCK high
@@ -77,17 +77,17 @@ int main (void)
    * 2. ants_A selection will override conflicting ants_B in 2x4 MODE
    * 3. No selections or only ants_B 0-0 will result in unresponsive switch
    */
-  radios5_8 = ((~PIND) & 1<<PD3) >> PD3;
+  radios5_8 = ((~PIND) & (1<<PD3)) >> PD3;
   ants_A    = ((~PIND) & ((1<<PD4)|(1<<PD5)|(1<<PD6)|(1<<PD7))) >> PD4;
-  ants_A   |= ((~PINB) & 1<<PB0) << PD4;
+  ants_A   |= ((~PINB) & (1<<PB0)) << PD4;
   ants_B    = ((~PINC) & ((1<<PC1)|(1<<PC2)|(1<<PC3)|(1<<PC4)|(1<<PC5))) >> PC1;
-  mode2x4   = ((~PINC) & 1<<PC0) || ants_B || (ants_A & (ants_A-1));
+  mode2x4   = ((~PINC) & (1<<PC0)) || ants_B || (ants_A & (ants_A-1));
 
   // clear relay driver registers before enabling outputs
   busWrite();
   // TPIC6C596 /G (OE)
-  PORTB &= ~(1 << PB1); // assert low
-  DDRB  |=  (1 << PB1); // output
+  PORTB &= ~(1<<PB1); // assert low
+  DDRB  |=  (1<<PB1); // output
 
   while(true) {
     while (uart0_available()) message.process(uart0_getc());
@@ -101,10 +101,10 @@ void processMessage ()
   while ( message.available() ) {
     if ( message.checkString((char *)"DATA") ) {
       message.readInt();                      // address
-      uint8_t msgRadio   = message.readInt(); // radio
+      int msgRadio   = message.readInt(); // radio
       message.readInt();                      // band
       message.readInt();                      // bearing
-      uint8_t msgAntenna = message.readInt(); // antenna
+      int msgAntenna = message.readInt(); // antenna
       processData(msgRadio, msgAntenna);
     } else if (message.checkString((char *)"CONFIG")) {
       dumpConfig();
@@ -114,7 +114,7 @@ void processMessage ()
   }
 }
 
-void processData(uint8_t msgRadio, uint8_t msgAntenna)
+void processData(int msgRadio, int msgAntenna)
 {
   if (msgRadio > radios5_8*radios && msgRadio <= ((radios5_8*radios)+radios)) { // radio in our range
     if ( antenna[msgRadio] != msgAntenna ) { // update only if antenna changed
@@ -122,7 +122,7 @@ void processData(uint8_t msgRadio, uint8_t msgAntenna)
       for (uint8_t i = 0; i < nBytes; ++i) { // clear data buffer
           busData[i] = 0;
       }
-      for (uint8_t radio = (radios5_8*radios) + 1; radio <= ((radios5_8*radios)+radios); ++radio) { // loop through our radios
+      for (uint8_t radio = (radios5_8*radios) + 1; radio <= (radios5_8*radios)+radios; ++radio) { // loop through our radios
         uint8_t _radio_idx = (radio - 1) % radios; // zero index radio number
 
         if ( mode2x4 ) { // 2x4 mode
@@ -132,8 +132,8 @@ void processData(uint8_t msgRadio, uint8_t msgAntenna)
                ( ants_A&8  && antenna[radio] >= 25 && antenna[radio] <= 32 ) ||
                ( ants_A&16 && antenna[radio] >= 33 && antenna[radio] <= 40 )
           ) {
-            busData[nBytes-1] |= 1 << _radio_idx; // activate radio's buss relay
-            busData[_radio_idx] |= 1 << ( ( _radio_idx / 2 ) * 2 ); // bit shift 0 (A,B) or 2 (C,D)
+            busData[nBytes-1] |= (1 << _radio_idx); // activate radio's buss relay
+            busData[_radio_idx] |= (1 << ((_radio_idx / 2) * 2)); // bit shift 0 (A,B) or 2 (C,D)
           }
           else
           if ( ( ants_B&1  && antenna[radio] >= 1  && antenna[radio] <= 8  ) || // antenna in our range
@@ -142,8 +142,8 @@ void processData(uint8_t msgRadio, uint8_t msgAntenna)
                ( ants_B&8  && antenna[radio] >= 25 && antenna[radio] <= 32 ) ||
                ( ants_B&16 && antenna[radio] >= 33 && antenna[radio] <= 40 )
           ) {
-            busData[nBytes-1] |= 1 << _radio_idx;
-            busData[_radio_idx] |= 1 << ( ( ( _radio_idx / 2 ) * 2 ) + 4 ); // bit shift 4 (A,B) or 6 (C,D)
+            busData[nBytes-1] |= (1 << _radio_idx);
+            busData[_radio_idx] |= (1 << (((_radio_idx / 2) * 2) + 4 )); // bit shift 4 (A,B) or 6 (C,D)
           }
         }
         else { // 8x4 mode
@@ -153,12 +153,12 @@ void processData(uint8_t msgRadio, uint8_t msgAntenna)
                ( ants_A&8  && antenna[radio] >= 25 && antenna[radio] <= 32 ) ||
                ( ants_A&16 && antenna[radio] >= 33 && antenna[radio] <= 40 )
           ) {
-            busData[nBytes-1] |= 1 << _radio_idx; // active radio's buss relay
+            busData[nBytes-1] |= (1 << _radio_idx); // active radio's buss relay
             uint8_t _antenna_idx = (antenna[radio] - 1) % 8; // map antenna number to port number
             uint8_t _byte_idx = _antenna_idx / 2; // find data byte number for this antenna
-            busData[_byte_idx] |= 1 << (((_antenna_idx % 2) * 4) + ((_radio_idx / 2) * 2)); // (A,B) or (C,D) antenna enable
+            busData[_byte_idx] |= (1 << (((_antenna_idx % 2) * 4) + ((_radio_idx / 2) * 2))); // (A,B) or (C,D) antenna enable
             if (_radio_idx % 2) { // only if radio B (1) or D (3)
-              busData[_byte_idx] |= 1 << (((_antenna_idx % 2) * 4) + _radio_idx ); // B or D active
+              busData[_byte_idx] |= (1 << (((_antenna_idx % 2) * 4) + _radio_idx )); // B or D active
             }
           }
         }
@@ -171,12 +171,12 @@ void processData(uint8_t msgRadio, uint8_t msgAntenna)
 void busWrite ()
 {
 #ifdef OUTPUTS_ENABLE
-   PORTB &= ~(1 << PB2); // RCK assert low
+   PORTB &= ~(1<<PB2); // RCK assert low
 #endif
    for (int8_t i = nBytes-1; i >= 0; --i) {
 #ifdef OUTPUTS_ENABLE
      SPDR = busData[i];
-     while (!(SPSR & (1 << SPIF))) ;
+     while (!(SPSR & (1<<SPIF))) ;
 #endif
 #ifdef DEBUG
      char s[9];
@@ -187,7 +187,7 @@ void busWrite ()
 #endif
    }
 #ifdef OUTPUTS_ENABLE
-   PORTB |= (1 << PB2); // RCK assert high
+   PORTB |= (1<<PB2); // RCK assert high
 #endif
 }
 
