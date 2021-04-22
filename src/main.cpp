@@ -16,7 +16,8 @@
 #include "Messenger.h"
 #include "uart.h"
 
-//#define DEBUG
+//#define DEBUG0
+//#define DEBUG1
 #define OUTPUTS_ENABLE
 #define UART_BAUD_RATE 38400
 
@@ -26,9 +27,8 @@ const uint8_t ssPin      = 10;
 const uint8_t oePin      =  9;
 const uint8_t rs485TxPin =  2;
 
-int antenna[(radios * 2) + 1];
+int     antenna[(radios * 2) + 1];
 uint8_t busData[nBytes];
-
 uint8_t radios5_8 = 0;
 uint8_t ants_A    = 0;
 uint8_t ants_B    = 0;
@@ -36,12 +36,14 @@ bool    mode2x4   = false;
 
 Messenger message = Messenger();
 
-void processMessage();
-void processData(int,int);
-void buildData();
-void busWrite();
-void dumpConfig();
-void toggle_relays();
+void processMessage ();
+void processData (int,int);
+void buildData ();
+void busWrite ();
+#ifdef DEBUG1
+void dumpConfig ();
+void toggle_relays ();
+#endif
 
 int main (void)
 {
@@ -49,13 +51,13 @@ int main (void)
   PORTD &= ~(1 << PD2); // assert low for rx
   DDRD  |=  (1 << PD2); // output
 
-  // config pins
-  DDRB  &=  ~(1<<PB0);                                               // inputs
-  PORTB |=   (1<<PB0);                                               // pullup
-  DDRC  &= ~((1<<PC0)|(1<<PC1)|(1<<PC2)|(1<<PC3)|(1<<PC4)|(1<<PC5)); // inputs
-  PORTC |=   (1<<PC0)|(1<<PC1)|(1<<PC2)|(1<<PC3)|(1<<PC4)|(1<<PC5);  // pullup
-  DDRD  &= ~((1<<PD3)|(1<<PD4)|(1<<PD5)|(1<<PD6)|(1<<PD7));          // inputs
-  PORTD |=   (1<<PD3)|(1<<PD4)|(1<<PD5)|(1<<PD6)|(1<<PD7);           // pullup
+  // config pins, inputs with internal pullups
+  DDRB  &=  ~(1<<PB0);
+  PORTB |=   (1<<PB0);
+  DDRC  &= ~((1<<PC0)|(1<<PC1)|(1<<PC2)|(1<<PC3)|(1<<PC4)|(1<<PC5));
+  PORTC |=   (1<<PC0)|(1<<PC1)|(1<<PC2)|(1<<PC3)|(1<<PC4)|(1<<PC5);
+  DDRD  &= ~((1<<PD3)|(1<<PD4)|(1<<PD5)|(1<<PD6)|(1<<PD7));
+  PORTD |=   (1<<PD3)|(1<<PD4)|(1<<PD5)|(1<<PD6)|(1<<PD7);
 
   // SPI setup
   PORTB |= (1<<PB2);                   // SS/RCK high
@@ -83,7 +85,7 @@ int main (void)
   memset(busData, 0, sizeof(busData));
   // clear relay driver registers before enabling outputs
   busWrite();
-  // TPIC6C596 /G (OE)
+  // TPIC6C596 /G output enable
   PORTB &= ~(1<<PB1); // assert low
   DDRB  |=  (1<<PB1); // output
 
@@ -97,13 +99,14 @@ int main (void)
 void processMessage ()
 {
   while ( message.available() ) {
-    if ( message.checkString((char *)"DATA") || message.checkString((char *)"DAT")) {
+    if ( message.checkString((char *)"DATA")) {
       message.readInt();                  // address
       int msgRadio   = message.readInt(); // radio
       message.readInt();                  // band
       message.readInt();                  // bearing
       int msgAntenna = message.readInt(); // antenna
       processData(msgRadio, msgAntenna);
+#ifdef DEBUG1
     } else if (message.checkString((char *)"CFG")) {
       dumpConfig();
     } else if (message.checkString((char *)"RLY")) { // cycle relays
@@ -114,6 +117,7 @@ void processMessage ()
       memset(antenna, 0, sizeof(antenna));
       memset(busData, 0, sizeof(busData));
       busWrite();
+#endif
     } else {
       message.readInt(); // discard extra data (virt ant, gain, HPF, BPF)
     }
@@ -187,7 +191,7 @@ void busWrite ()
      SPDR = busData[i];
      while (!(SPSR & (1<<SPIF))) ;
 #endif
-#ifdef DEBUG
+#ifdef DEBUG0
      char s[9];
      itoa(busData[i], s, 2);
      uart0_puts(s);
@@ -200,6 +204,7 @@ void busWrite ()
 #endif
 }
 
+#ifdef DEBUG1
 void dumpConfig ()
 {
   char s[2];
@@ -242,3 +247,4 @@ void toggle_relays ()
   }
   busWrite();
 }
+#endif
