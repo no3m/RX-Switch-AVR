@@ -12,6 +12,7 @@
 
 #include <avr/io.h>
 #include <stdlib.h>
+#include <util/delay.h>
 #include "Messenger.h"
 #include "uart.h"
 
@@ -37,18 +38,13 @@ Messenger message = Messenger();
 
 void processMessage();
 void processData(int,int);
+void buildData();
 void busWrite();
 void dumpConfig();
+void toggle_relays();
 
 int main (void)
 {
-  for (uint8_t i = 0; i < (radios * 2) + 1; ++i) {
-    antenna[i] = 0;
-  }
-  for (uint8_t i = 0; i < nBytes; ++i) {
-    busData[i] = 0;
-  }
-
   // rs485 rx/tx pin
   PORTD &= ~(1 << PD2); // assert low for rx
   DDRD  |=  (1 << PD2); // output
@@ -83,6 +79,8 @@ int main (void)
   ants_B    = ((~PINC) & ((1<<PC1)|(1<<PC2)|(1<<PC3)|(1<<PC4)|(1<<PC5))) >> PC1;
   mode2x4   = ((~PINC) & (1<<PC0)) || ants_B || (ants_A & (ants_A-1));
 
+  memset(antenna, 0, sizeof(antenna));
+  memset(busData, 0, sizeof(busData));
   // clear relay driver registers before enabling outputs
   busWrite();
   // TPIC6C596 /G (OE)
@@ -99,15 +97,23 @@ int main (void)
 void processMessage ()
 {
   while ( message.available() ) {
-    if ( message.checkString((char *)"DATA") ) {
-      message.readInt();                      // address
+    if ( message.checkString((char *)"DATA") || message.checkString((char *)"DAT")) {
+      message.readInt();                  // address
       int msgRadio   = message.readInt(); // radio
-      message.readInt();                      // band
-      message.readInt();                      // bearing
+      message.readInt();                  // band
+      message.readInt();                  // bearing
       int msgAntenna = message.readInt(); // antenna
       processData(msgRadio, msgAntenna);
-    } else if (message.checkString((char *)"CONFIG")) {
+    } else if (message.checkString((char *)"CFG")) {
       dumpConfig();
+    } else if (message.checkString((char *)"RLY")) { // cycle relays
+      toggle_relays();
+      buildData();
+      busWrite();
+    } else if (message.checkString((char *)"RST")) { // soft reset
+      memset(antenna, 0, sizeof(antenna));
+      memset(busData, 0, sizeof(busData));
+      busWrite();
     } else {
       message.readInt(); // discard extra data (virt ant, gain, HPF, BPF)
     }
@@ -119,51 +125,54 @@ void processData(int msgRadio, int msgAntenna)
   if (msgRadio > radios5_8*radios && msgRadio <= ((radios5_8*radios)+radios)) { // radio in our range
     if ( antenna[msgRadio] != msgAntenna ) { // update only if antenna changed
       antenna[msgRadio] = msgAntenna;
-      for (uint8_t i = 0; i < nBytes; ++i) { // clear data buffer
-          busData[i] = 0;
-      }
-      for (uint8_t radio = (radios5_8*radios) + 1; radio <= (radios5_8*radios)+radios; ++radio) { // loop through our radios
-        uint8_t _radio_idx = (radio - 1) % radios; // zero index radio number
-
-        if ( mode2x4 ) { // 2x4 mode
-          if ( ( ants_A&1  && antenna[radio] >= 1  && antenna[radio] <= 8  ) || // antenna in our range
-               ( ants_A&2  && antenna[radio] >= 9  && antenna[radio] <= 16 ) || // port 1
-               ( ants_A&4  && antenna[radio] >= 17 && antenna[radio] <= 24 ) ||
-               ( ants_A&8  && antenna[radio] >= 25 && antenna[radio] <= 32 ) ||
-               ( ants_A&16 && antenna[radio] >= 33 && antenna[radio] <= 40 )
-          ) {
-            busData[nBytes-1] |= (1 << _radio_idx); // activate radio's buss relay
-            busData[_radio_idx] |= (1 << ((_radio_idx / 2) * 2)); // bit shift 0 (A,B) or 2 (C,D)
-          }
-          else
-          if ( ( ants_B&1  && antenna[radio] >= 1  && antenna[radio] <= 8  ) || // antenna in our range
-               ( ants_B&2  && antenna[radio] >= 9  && antenna[radio] <= 16 ) || // port 2
-               ( ants_B&4  && antenna[radio] >= 17 && antenna[radio] <= 24 ) ||
-               ( ants_B&8  && antenna[radio] >= 25 && antenna[radio] <= 32 ) ||
-               ( ants_B&16 && antenna[radio] >= 33 && antenna[radio] <= 40 )
-          ) {
-            busData[nBytes-1] |= (1 << _radio_idx);
-            busData[_radio_idx] |= (1 << (((_radio_idx / 2) * 2) + 4 )); // bit shift 4 (A,B) or 6 (C,D)
-          }
-        }
-        else { // 8x4 mode
-          if ( ( ants_A&1  && antenna[radio] >= 1  && antenna[radio] <= 8  ) || // antenna in our range
-               ( ants_A&2  && antenna[radio] >= 9  && antenna[radio] <= 16 ) ||
-               ( ants_A&4  && antenna[radio] >= 17 && antenna[radio] <= 24 ) ||
-               ( ants_A&8  && antenna[radio] >= 25 && antenna[radio] <= 32 ) ||
-               ( ants_A&16 && antenna[radio] >= 33 && antenna[radio] <= 40 )
-          ) {
-            busData[nBytes-1] |= (1 << _radio_idx); // active radio's buss relay
-            uint8_t _antenna_idx = (antenna[radio] - 1) % 8; // map antenna number to port number
-            uint8_t _byte_idx = _antenna_idx / 2; // find data byte number for this antenna
-            busData[_byte_idx] |= (1 << (((_antenna_idx % 2) * 4) + ((_radio_idx / 2) * 2))); // (A,B) or (C,D) antenna enable
-            if (_radio_idx % 2) { // only if radio B (1) or D (3)
-              busData[_byte_idx] |= (1 << (((_antenna_idx % 2) * 4) + _radio_idx )); // B or D active
-            }
-          }
-        }
-      }
+      buildData();
       busWrite();
+    }
+  }
+}
+
+void buildData ()
+{
+  memset(busData, 0, sizeof(busData));
+  for (uint8_t radio = (radios5_8*radios) + 1; radio <= (radios5_8*radios)+radios; ++radio) { // loop through our radios
+    uint8_t _radio_idx = (radio - 1) % radios; // zero index radio number
+
+    if ( mode2x4 ) { // 2x4 mode
+      if ( ( ants_A&1  && antenna[radio] >= 1  && antenna[radio] <= 8  ) || // antenna in our range
+           ( ants_A&2  && antenna[radio] >= 9  && antenna[radio] <= 16 ) || // port 1
+           ( ants_A&4  && antenna[radio] >= 17 && antenna[radio] <= 24 ) ||
+           ( ants_A&8  && antenna[radio] >= 25 && antenna[radio] <= 32 ) ||
+           ( ants_A&16 && antenna[radio] >= 33 && antenna[radio] <= 40 )
+      ) {
+        busData[nBytes-1] |= (1 << _radio_idx); // activate radio's buss relay
+        busData[_radio_idx] |= (1 << ((_radio_idx / 2) * 2)); // bit shift 0 (A,B) or 2 (C,D)
+      }
+      else
+      if ( ( ants_B&1  && antenna[radio] >= 1  && antenna[radio] <= 8  ) || // antenna in our range
+           ( ants_B&2  && antenna[radio] >= 9  && antenna[radio] <= 16 ) || // port 2
+           ( ants_B&4  && antenna[radio] >= 17 && antenna[radio] <= 24 ) ||
+           ( ants_B&8  && antenna[radio] >= 25 && antenna[radio] <= 32 ) ||
+           ( ants_B&16 && antenna[radio] >= 33 && antenna[radio] <= 40 )
+      ) {
+        busData[nBytes-1] |= (1 << _radio_idx);
+        busData[_radio_idx] |= (1 << (((_radio_idx / 2) * 2) + 4 )); // bit shift 4 (A,B) or 6 (C,D)
+      }
+    }
+    else { // 8x4 mode
+      if ( ( ants_A&1  && antenna[radio] >= 1  && antenna[radio] <= 8  ) || // antenna in our range
+           ( ants_A&2  && antenna[radio] >= 9  && antenna[radio] <= 16 ) ||
+           ( ants_A&4  && antenna[radio] >= 17 && antenna[radio] <= 24 ) ||
+           ( ants_A&8  && antenna[radio] >= 25 && antenna[radio] <= 32 ) ||
+           ( ants_A&16 && antenna[radio] >= 33 && antenna[radio] <= 40 )
+      ) {
+        busData[nBytes-1] |= (1 << _radio_idx); // active radio's buss relay
+        uint8_t _antenna_idx = (antenna[radio] - 1) % 8; // map antenna number to port number
+        uint8_t _byte_idx = _antenna_idx / 2; // find data byte number for this antenna
+        busData[_byte_idx] |= (1 << (((_antenna_idx % 2) * 4) + ((_radio_idx / 2) * 2))); // (A,B) or (C,D) antenna enable
+        if (_radio_idx % 2) { // only if radio B (1) or D (3)
+          busData[_byte_idx] |= (1 << (((_antenna_idx % 2) * 4) + _radio_idx )); // B or D active
+        }
+      }
     }
   }
 }
@@ -218,4 +227,18 @@ void dumpConfig ()
   if (ants_B&8)  uart0_puts("25-32 ");
   if (ants_B&16) uart0_puts("33-40");
   uart0_puts("\r\n");
+}
+
+void toggle_relays ()
+{
+  memset(busData, 0, sizeof(busData));
+  for (uint8_t i = 0; i < nBytes; ++i) {
+    for (uint8_t j = 0; j < 8; ++j) {
+      busData[i] = (1<<j);
+      busWrite();
+      _delay_ms(10); // G5V-1 5ms pullin
+      busData[i] = 0;
+    }
+  }
+  busWrite();
 }
