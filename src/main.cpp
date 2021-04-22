@@ -10,16 +10,15 @@
 #define F_CPU 16000000UL
 #endif
 
+//#define DEBUG
+#define OUTPUTS_ENABLE
+#define UART_BAUD_RATE 38400
+
 #include <avr/io.h>
 #include <stdlib.h>
 #include <util/delay.h>
 #include "Messenger.h"
 #include "uart.h"
-
-//#define DEBUG0
-//#define DEBUG1
-#define OUTPUTS_ENABLE
-#define UART_BAUD_RATE 38400
 
 const uint8_t radios     =  4;
 const uint8_t nBytes     =  5;
@@ -38,12 +37,10 @@ Messenger message = Messenger();
 
 void processMessage ();
 void processData (int,int);
-void buildData ();
+void generateBusData ();
 void busWrite ();
-#ifdef DEBUG1
 void dumpConfig ();
-void toggle_relays ();
-#endif
+void toggleRelays ();
 
 int main (void)
 {
@@ -106,20 +103,19 @@ void processMessage ()
       message.readInt();                  // bearing
       int msgAntenna = message.readInt(); // antenna
       processData(msgRadio, msgAntenna);
-#ifdef DEBUG1
-    } else if (message.checkString((char *)"CFG")) {
-      dumpConfig();
+      while ( message.available() ) message.readInt(); // pop addt'l data
     } else if (message.checkString((char *)"RLY")) { // cycle relays
-      toggle_relays();
-      buildData();
+      toggleRelays();
+      generateBusData();
       busWrite();
     } else if (message.checkString((char *)"RST")) { // soft reset
       memset(antenna, 0, sizeof(antenna));
       memset(busData, 0, sizeof(busData));
       busWrite();
-#endif
+    } else if (message.checkString((char *)"CFG")) {
+      dumpConfig();
     } else {
-      message.readInt(); // discard extra data (virt ant, gain, HPF, BPF)
+      message.readInt(); // discard data
     }
   }
 }
@@ -129,13 +125,13 @@ void processData(int msgRadio, int msgAntenna)
   if (msgRadio > radios5_8*radios && msgRadio <= ((radios5_8*radios)+radios)) { // radio in our range
     if ( antenna[msgRadio] != msgAntenna ) { // update only if antenna changed
       antenna[msgRadio] = msgAntenna;
-      buildData();
+      generateBusData();
       busWrite();
     }
   }
 }
 
-void buildData ()
+void generateBusData ()
 {
   memset(busData, 0, sizeof(busData));
   for (uint8_t radio = (radios5_8*radios) + 1; radio <= (radios5_8*radios)+radios; ++radio) { // loop through our radios
@@ -191,7 +187,7 @@ void busWrite ()
      SPDR = busData[i];
      while (!(SPSR & (1<<SPIF))) ;
 #endif
-#ifdef DEBUG0
+#ifdef DEBUG
      char s[9];
      itoa(busData[i], s, 2);
      uart0_puts(s);
@@ -204,7 +200,6 @@ void busWrite ()
 #endif
 }
 
-#ifdef DEBUG1
 void dumpConfig ()
 {
   char s[2];
@@ -234,17 +229,16 @@ void dumpConfig ()
   uart0_puts("\r\n");
 }
 
-void toggle_relays ()
+void toggleRelays ()
 {
   memset(busData, 0, sizeof(busData));
   for (uint8_t i = 0; i < nBytes; ++i) {
     for (uint8_t j = 0; j < 8; ++j) {
       busData[i] = (1<<j);
       busWrite();
-      _delay_ms(10); // G5V-1 5ms pullin
+      _delay_ms(15); // G5V-1 5ms pullin
       busData[i] = 0;
     }
   }
   busWrite();
 }
-#endif
